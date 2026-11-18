@@ -1,4 +1,5 @@
-from .event import Event, Source
-from .experience import ExperienceLog, Record
-from .verify import verify_model
+from .event import Event, Source, Kind
+from .experience import ExperienceLog, Record, Opportunity
+from .world import World
+from .agents import RandomAgent, ReactiveAgent, GoalAgent
 from . import autonomy

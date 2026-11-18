@@ -1,25 +1,35 @@
-"""Событие. Происхождение ставит ТОЛЬКО harness. Самоотчёт агента игнорируется."""
+"""Событие. Происхождение цели и действия определяет ТОЛЬКО harness."""
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Tuple
+from typing import Any, Tuple, Optional
 
 
 class Source(str, Enum):
-    PID0_ENV = "pid0_env"                  # стихийное / структурное условие среды
-    PID0_INSTRUCTION = "pid0_instruction"  # внешняя цель/инструкция
-    PID1_INTERNAL = "pid1_internal"        # порождено самим агентом
-    UNKNOWN = "unknown"                    # происхождение не установлено
+    PID0_ENV = "pid0_env"
+    PID0_INSTRUCTION = "pid0_instruction"
+    PID1_INTERNAL = "pid1_internal"
+    UNKNOWN = "unknown"
+
+
+class Kind(str, Enum):
+    OBSERVATION = "observation"
+    GOAL = "goal"                # цель, порождённая системой
+    ACTION = "action"
+    OUTCOME = "outcome"
+    LAW_CHANGE = "law_change"
+    GOAL_ABANDON = "goal_abandon"
+    GOAL_REVISE = "goal_revise"
 
 
 @dataclass(frozen=True)
 class Event:
     id: int
-    t: float
+    t: int
     source: Source
-    kind: str                 # observation | goal | action | outcome | law_change
+    kind: Kind
     payload: Any = None
     confidence: float = 1.0
     parents: Tuple[int, ...] = field(default_factory=tuple)
 
-    def is_internal(self) -> bool:
-        return self.source is Source.PID1_INTERNAL
+    def is_internal_goal(self) -> bool:
+        return self.kind is Kind.GOAL and self.source is Source.PID1_INTERNAL
