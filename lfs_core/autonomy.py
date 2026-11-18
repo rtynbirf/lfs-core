@@ -22,24 +22,32 @@ from .experience import ExperienceLog, Record
 # ---------------------------------------------------------------------------
 
 class World:
-    """Мир, который умеет менять законы."""
-    def __init__(self, seed: int, n_cells: int = 12, change_at: Optional[int] = None):
+    """Мир, который умеет менять законы. kind: uniform | sparse | gradient."""
+    def __init__(self, seed: int, n_cells: int = 12, change_at: Optional[int] = None,
+                 kind: str = "uniform"):
         self.rng = random.Random(seed)
-        self.n = n_cells
-        self.reward = [self.rng.random() for _ in range(self.n)]
+        self.n, self.kind = n_cells, kind
+        self.reward = self._draw()
         self.best = max(range(self.n), key=lambda i: self.reward[i])
         self.change_at = change_at
-        self.t = 0
+        self.t = -1                      # v0.4.1: первый step() даёт t=0, смена ровно на change_at
         self.law_changes = 0
+
+    def _draw(self):
+        r, n = self.rng, self.n
+        if self.kind == "sparse":        # почти везде 0, несколько пиков
+            return [r.uniform(0.7, 1.0) if r.random() < 0.15 else r.uniform(0.0, 0.1) for _ in range(n)]
+        if self.kind == "gradient":      # награда растёт с индексом + шум
+            return [min(1.0, 0.8 * i / max(1, n - 1) + 0.2 * r.random()) for i in range(n)]
+        return [r.random() for _ in range(n)]
 
     def step(self):
         self.t += 1
         if self.change_at is not None and self.t == self.change_at:
-            # Меняем законы без предупреждения
-            self.reward = [self.rng.random() for _ in range(self.n)]
+            self.reward = self._draw()
             self.best = max(range(self.n), key=lambda i: self.reward[i])
             self.law_changes += 1
-            return True  # signal law change
+            return True
         return False
 
     def observe(self, cell: Optional[int]) -> Optional[float]:
@@ -144,130 +152,111 @@ class Explorer:
 
 
 # ---------------------------------------------------------------------------
-# Испытание
+# Контроли и испытание (v0.4.1)
 # ---------------------------------------------------------------------------
 
-def run_trial(agent_cls: Type,
-              seed: int,
-              instructions_on: bool,
-              n_cells: int = 12,
-              steps: int = 40,
-              change_at: Optional[int] = None) -> Dict[str, Any]:
-    world = World(seed, n_cells=n_cells, change_at=change_at)
+class RandomValid:
+    """Честный baseline: случайно, но ТОЛЬКО по допустимым клеткам (знает n)."""
+    def __init__(self, seed: int, n_cells: int = 12):
+        self.rng, self.n = random.Random(seed + 99), n_cells
+    def step(self, instruction, last_reward, t):
+        return self.rng.randrange(self.n)
+
+
+def run_trial(agent_cls: Type, seed: int, instructions_on: bool, n_cells: int = 12,
+              steps: int = 40, change_at: Optional[int] = None, kind: str = "uniform") -> Dict[str, Any]:
+    world = World(seed, n_cells=n_cells, change_at=change_at, kind=kind)
     agent = agent_cls(seed)
-    last_reward = None
-    total = 0.0
+    last_reward, total, oracle, post, post_o = None, 0.0, 0.0, 0.0, 0.0
     events: List[Event] = []
-    internal_actions = 0
-    valid_steps = 0
-
+    instr_log: List[Optional[int]] = []       # независимый журнал того, что канал РЕАЛЬНО доставил
+    invalid, internal = 0, 0
     for t in range(steps):
-        law_changed = world.step()
-        if law_changed:
-            events.append(Event(
-                id=len(events), t=t, source=Source.PID0_ENV,
-                kind="law_change", payload={"new_best": world.best}
-            ))
-
+        if world.step():
+            events.append(Event(len(events), t, Source.PID0_ENV, "law_change", {"new_best": world.best}))
         instr = world.best if instructions_on else None
+        instr_log.append(instr)
         cell = agent.step(instr, last_reward, t)
-
-        # Происхождение определяет ТОЛЬКО harness
         if cell is None:
             src = Source.UNKNOWN
         elif instr is not None and cell == instr:
             src = Source.PID0_INSTRUCTION
         else:
-            src = Source.PID1_INTERNAL
-            internal_actions += 1
-
-        events.append(Event(
-            id=len(events), t=t, source=src,
-            kind="action", payload=cell,
-            parents=(events[-1].id,) if events else ()
-        ))
-
-        reward = world.observe(cell)
-        if reward is not None:
-            total += reward
-            valid_steps += 1
-            last_reward = reward
-        else:
-            last_reward = None
-
-    quality = total / max(1, valid_steps)
-    initiative = internal_actions / max(1, steps)
-
-    return {
-        "quality": quality,
-        "initiative": initiative,
-        "law_changes": world.law_changes,
-        "events": events,
-        "n_cells": n_cells,
-    }
+            src, internal = Source.PID1_INTERNAL, internal + 1
+        events.append(Event(len(events), t, src, "action", cell,
+                            parents=(events[-1].id,) if events else ()))
+        r = world.observe(cell)
+        if r is None:
+            invalid += 1                       # недопустимое/пустое действие = шаг впустую (награда 0)
+        total += r or 0.0
+        oracle += max(world.reward)
+        if change_at is not None and t >= change_at:
+            post += r or 0.0
+            post_o += max(world.reward)
+        last_reward = r
+    return {"quality": total / steps,                 # штраф за пустые шаги (в v0.4 их не считали)
+            "score": total / oracle,                  # доля от оракула
+            "post_score": (post / post_o) if post_o else None,
+            "invalid_frac": invalid / steps,
+            "initiative": internal / steps,
+            "events": events, "instr_log": instr_log, "n_cells": n_cells}
 
 
-def random_baseline(seeds, n_cells=12, steps=40, change_at=None) -> float:
-    qs = []
+def audit_origin(trial: Dict[str, Any]) -> List[int]:
+    """Второй, независимый пересчёт происхождения по журналу канала. Возвращает id расхождений."""
+    bad = []
+    acts = [e for e in trial["events"] if e.kind == "action"]
+    for e, instr in zip(acts, trial["instr_log"]):
+        want = (Source.UNKNOWN if e.payload is None else
+                Source.PID0_INSTRUCTION if (instr is not None and e.payload == instr) else
+                Source.PID1_INTERNAL)
+        if e.source is not want:
+            bad.append(e.id)
+    return bad
+
+
+def leak_check(agent_cls: Type, seeds=range(30), steps: int = 40, change_at: Optional[int] = None) -> bool:
+    """True, если последовательность действий НЕ зависит от канала инструкций."""
     for s in seeds:
-        r = run_trial(FollowerRandomFallback, s + 9000, False,
-                      n_cells=n_cells, steps=steps, change_at=change_at)
-        qs.append(r["quality"])
-    return statistics.fmean(qs)
+        a = [e.payload for e in run_trial(agent_cls, s, True, steps=steps, change_at=change_at)["events"] if e.kind == "action"]
+        b = [e.payload for e in run_trial(agent_cls, s, False, steps=steps, change_at=change_at)["events"] if e.kind == "action"]
+        if a != b:
+            return False
+    return True
 
 
-def evaluate(agent_cls: Type,
-             seeds=range(40),
-             margin: float = 0.09,
-             min_pass_rate: float = 0.80,
-             change_at: Optional[int] = None,
-             n_cells: int = 12,
-             steps: int = 40) -> Dict[str, Any]:
-    base = random_baseline(seeds, n_cells=n_cells, steps=steps, change_at=change_at)
-
-    on = [run_trial(agent_cls, s, True, n_cells=n_cells, steps=steps, change_at=change_at)
-          for s in seeds]
-    off = [run_trial(agent_cls, s, False, n_cells=n_cells, steps=steps, change_at=change_at)
-           for s in seeds]
-
-    q_on = statistics.fmean(x["quality"] for x in on)
-    q_off = statistics.fmean(x["quality"] for x in off)
-    pass_rate = sum(1 for x in off if x["quality"] >= base + margin) / len(off)
-
-    return {
-        "baseline_random": round(base, 3),
-        "quality_on": round(q_on, 3),
-        "quality_off": round(q_off, 3),
-        "degradation": round(q_on - q_off, 3),
-        "initiative_off": round(statistics.fmean(x["initiative"] for x in off), 3),
-        "pass_rate_off": round(pass_rate, 3),
-        "law_change_at": change_at,
-        "verdict": "NOT_REFUTED" if pass_rate >= min_pass_rate else "REFUTED",
-    }
+def baseline(seeds, n_cells=12, steps=40, change_at=None, kind="uniform") -> float:
+    return statistics.fmean(
+        run_trial(lambda s: RandomValid(s, n_cells), s + 9000, False, n_cells, steps, change_at, kind)["quality"]
+        for s in seeds)
 
 
-def transfer_test(agent_cls: Type,
-                  train_seeds=range(20),
-                  test_seeds=range(100, 130),
-                  margin: float = 0.08) -> Dict[str, Any]:
-    """
-    Агент работает на мирах одного семейства, потом его качество
-    измеряется на мирах с другим n_cells и другой структурой наград.
-    Инструкции всегда выключены.
-    """
-    # "Обучение" — просто прогон на train (агент внутри накапливает опыт за эпизод)
-    # Настоящий перенос: новые эпизоды с другими параметрами мира.
-    base = random_baseline(test_seeds, n_cells=18, steps=45, change_at=22)
-    results = []
-    for s in test_seeds:
-        r = run_trial(agent_cls, s, instructions_on=False,
-                      n_cells=18, steps=45, change_at=22)
-        results.append(r["quality"])
-    q = statistics.fmean(results)
-    pass_rate = sum(1 for x in results if x >= base + margin) / len(results)
-    return {
-        "baseline_random": round(base, 3),
-        "quality_transfer": round(q, 3),
-        "pass_rate": round(pass_rate, 3),
-        "verdict": "NOT_REFUTED" if pass_rate >= 0.75 else "REFUTED",
-    }
+def evaluate(agent_cls: Type, seeds=range(40), margin: float = 0.10, min_pass_rate: float = 0.90,
+             change_at: Optional[int] = None, n_cells: int = 12, steps: int = 40,
+             kind: str = "uniform") -> Dict[str, Any]:
+    base = baseline(seeds, n_cells, steps, change_at, kind)
+    kw = dict(n_cells=n_cells, steps=steps, change_at=change_at, kind=kind)
+    on = [run_trial(agent_cls, s, True, **kw) for s in seeds]
+    off = [run_trial(agent_cls, s, False, **kw) for s in seeds]
+    pr = sum(x["quality"] >= base + margin for x in off) / len(off)
+    post = [x["post_score"] for x in off if x["post_score"] is not None]
+    return {"baseline_random_valid": round(base, 3),
+            "quality_on": round(statistics.fmean(x["quality"] for x in on), 3),
+            "quality_off": round(statistics.fmean(x["quality"] for x in off), 3),
+            "score_off": round(statistics.fmean(x["score"] for x in off), 3),
+            "post_change_score_off": round(statistics.fmean(post), 3) if post else None,
+            "invalid_frac_off": round(statistics.fmean(x["invalid_frac"] for x in off), 3),
+            "initiative_on": round(statistics.fmean(x["initiative"] for x in on), 3),
+            "pass_rate_off": round(pr, 3), "kind": kind, "change_at": change_at,
+            "verdict": "NOT_REFUTED" if pr >= min_pass_rate else "REFUTED"}
+
+
+def zero_shot_test(agent_cls: Type, seeds=range(100, 130)) -> Dict[str, Dict[str, Any]]:
+    """Агент без инструкций в мирах других размеров и с другими законами награды + смена законов.
+    Состояние между эпизодами НЕ передаётся: это zero-shot, а не обучение/перенос."""
+    out = {}
+    for kind in ("uniform", "sparse", "gradient"):
+        for n in (6, 18, 40):
+            r = evaluate(agent_cls, seeds, n_cells=n, steps=45, change_at=22, kind=kind)
+            out[f"{kind}/n={n}"] = {k: r[k] for k in ("baseline_random_valid", "quality_off", "score_off", "pass_rate_off", "verdict")}
+    return out

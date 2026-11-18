@@ -1,19 +1,10 @@
-#!/usr/bin/env python3
-"""Демонстрация LFS CORE v0.4"""
 from lfs_core import autonomy as A
-import pprint
-
-print("=== Базовый тест (без смены законов) ===")
-for cls in (A.Follower, A.FollowerRandomFallback, A.Explorer):
-    res = A.evaluate(cls, change_at=None)
-    print(f"{cls.__name__:25s} {res['verdict']:12s}  on={res['quality_on']:.3f}  off={res['quality_off']:.3f}  deg={res['degradation']:.3f}")
-
-print("\n=== Тест со сменой законов в середине (t=18) ===")
-for cls in (A.Follower, A.FollowerRandomFallback, A.Explorer):
-    res = A.evaluate(cls, change_at=18)
-    print(f"{cls.__name__:25s} {res['verdict']:12s}  on={res['quality_on']:.3f}  off={res['quality_off']:.3f}  deg={res['degradation']:.3f}")
-
-print("\n=== Transfer-тест (новый размер мира + смена законов) ===")
-for cls in (A.FollowerRandomFallback, A.Explorer):
-    res = A.transfer_test(cls)
-    print(f"{cls.__name__:25s} {res['verdict']:12s}  quality={res['quality_transfer']:.3f}  baseline={res['baseline_random']:.3f}")
+for ch in (None, 18):
+    print(f"=== change_at={ch} ===")
+    for c in (A.Follower, A.FollowerRandomFallback, A.Explorer):
+        r = A.evaluate(c, change_at=ch)
+        print(f"{c.__name__:24s}{r['verdict']:12s} on={r['quality_on']:.3f} off={r['quality_off']:.3f} "
+              f"score={r['score_off']:.3f} post={r['post_change_score_off']} invalid={r['invalid_frac_off']:.2f} base={r['baseline_random_valid']:.3f}")
+print("leak_check Explorer:", A.leak_check(A.Explorer), "| Follower:", A.leak_check(A.Follower))
+print("=== zero-shot (Explorer) ===")
+for k, v in A.zero_shot_test(A.Explorer).items(): print(k, v)
