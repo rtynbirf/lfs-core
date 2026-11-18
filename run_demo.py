@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""LFS CORE v0.6.1 — Goal Necessity ablation + контроли"""
 from lfs_core import autonomy as A
-from lfs_core.agents import (NoGoalAgent, ExternalGoalAgent, SelfGoalAgent, SelfGoalReviseAgent,
-                             StickyHeuristic, OracleNoGoal)
+from lfs_core.agents import (ReactiveAgent, StickyAgent, ExternalGoalAgent,
+                             SelfGoalAgent, SelfGoalReviseAgent)
 
-MODES = [("A_NoGoal", NoGoalAgent), ("B_External(oracle)", ExternalGoalAgent), ("C_SelfGoal", SelfGoalAgent),
-         ("D_SelfRevise", SelfGoalReviseAgent), ("Ctl_Sticky(no goals)", StickyHeuristic), ("Ceiling_Oracle", OracleNoGoal)]
-print("=== Pre-registered: margin=0.08, min_pass_rate=0.80, STEPS=60 ===")
-for label, kw, ch in (("default", {}, None), ("default+change30", {}, 30), ("harsh change30", dict(harsh=True), 30)):
-    print(f"\n--- {label} ---")
-    for name, cls in MODES:
-        r = A.evaluate(cls, change_at=ch, **kw)
-        print(f"{name:21s} {r['verdict']:12s} q={r['quality']:.3f} oracle%={r['share_of_oracle']:.2f} "
-              f"post={r['post_change_quality']} done={r['avg_completed']:.1f} rev={r['avg_revises']:.1f}")
-print("\n--- Прирост механизма целей над обязательством (StickyHeuristic) ---")
-for name, cls in (("C", SelfGoalAgent), ("D", SelfGoalReviseAgent)):
-    for ch in (None, 30):
-        print(name, ch, A.goal_increment(cls, change_at=ch))
+print("=== LFS v0.7 | Pre-registered: margin=0.10, pass_rate=0.90, STEPS=70 ===\n")
+
+print("--- change_at=None ---")
+for name, cls in [("A_Reactive", ReactiveAgent), ("B_Sticky", StickyAgent),
+                  ("C_External", ExternalGoalAgent), ("D_SelfGoal", SelfGoalAgent),
+                  ("E_SelfRevise", SelfGoalReviseAgent)]:
+    r = A.evaluate(cls, change_at=None)
+    print(f"{name:14s} {r['verdict']:12s} q={r['quality']:.3f} Δ={r['delta']:+.3f} "
+          f"goals={r['avg_goals']:.1f} rev={r['avg_revises']:.1f} abn={r['avg_abandons']:.1f} done={r['avg_completed']:.1f}")
+
+print("\n--- change_at=35 (harsh) ---")
+for name, cls in [("A_Reactive", ReactiveAgent), ("B_Sticky", StickyAgent),
+                  ("C_External", ExternalGoalAgent), ("D_SelfGoal", SelfGoalAgent),
+                  ("E_SelfRevise", SelfGoalReviseAgent)]:
+    r = A.evaluate(cls, change_at=35)
+    print(f"{name:14s} {r['verdict']:12s} q={r['quality']:.3f} Δ={r['delta']:+.3f} "
+          f"goals={r['avg_goals']:.1f} rev={r['avg_revises']:.1f} abn={r['avg_abandons']:.1f} done={r['avg_completed']:.1f}")

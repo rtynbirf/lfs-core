@@ -1,267 +1,243 @@
 """
-Четыре режима для проверки причинной роли целей.
+Пять режимов v0.7 (жёсткое разделение):
 
-A. NoGoal          — чистый greedy / exploratory, без целей
-B. ExternalGoal    — цели приходят извне (harness)
-C. SelfGoal        — агент сам формирует цели и держит их
-D. SelfGoalRevise  — формирует + пересматривает + отказывается по ценности
+A. Reactive          — myopic, без упорства и без целей
+B. Sticky            — упорство / commitment, без целей
+C. ExternalGoal      — внешняя цель (без оракула)
+D. SelfGoal          — самостоятельная цель, держит
+E. SelfGoalRevise    — самостоятельная цель + пересмотр/отказ по ценности
 """
 from __future__ import annotations
 import random
 from typing import Optional, Dict, Any, Tuple, List
-from .event import Source
 
 
-class BaseAgent:
+class Base:
     def __init__(self, seed: int):
-        self.rng = random.Random(seed + 17)
+        self.rng = random.Random(seed + 23)
+        self.mem: Dict[str, List[float]] = {}
+        self.last = None
         self.t = 0
-        self.last_action = None
-        self.memory: Dict[str, List[float]] = {}   # action -> list of rewards
 
-    def _remember(self, action: str, reward: float):
-        self.memory.setdefault(action, []).append(reward)
+    def remember(self, a: str, r: float):
+        self.mem.setdefault(a, []).append(r)
 
-    def _est(self, action: str) -> float:
-        rs = self.memory.get(action, [])
+    def est(self, a: str) -> float:
+        rs = self.mem.get(a, [])
         if not rs:
             return 0.0
-        # недавние важнее
-        w = [0.7 ** i for i in range(len(rs))][::-1]
-        return sum(r * ww for r, ww in zip(rs, w)) / sum(w)
+        w = [0.65 ** i for i in range(len(rs))][::-1]
+        return sum(x * ww for x, ww in zip(rs, w)) / sum(w)
 
+
+class ReactiveAgent(Base):
+    """A. Чистый myopic."""
     def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
-        raise NotImplementedError
-
-
-class NoGoalAgent(BaseAgent):
-    """A. Нет механизма целей. Myopic + лёгкое исследование."""
-    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
-        if self.last_action is not None and obs.get("last_reward") is not None:
-            self._remember(self.last_action, obs["last_reward"])
+        if self.last and obs.get("last_reward") is not None:
+            self.remember(self.last, obs["last_reward"])
         acts = obs.get("available") or []
         if not acts:
             return None, None
-
-        # ε-greedy
-        if self.rng.random() < 0.28:
-            action = self.rng.choice(acts)
+        if self.rng.random() < 0.35:
+            a = self.rng.choice(acts)
         else:
-            best, best_v = None, -1e9
-            for a in acts:
-                v = self._est(a)
-                if v > best_v:
-                    best_v, best = v, a
-            action = best if best is not None else self.rng.choice(acts)
-
-        self.last_action = action
-        self.t = obs["t"]
-        return action, None
-
-
-class ExternalGoalAgent(BaseAgent):
-    """B. Цели задаёт harness через obs['external_goal']."""
-    def __init__(self, seed: int):
-        super().__init__(seed)
-        self.steps_on_goal = 0
-
-    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
-        if self.last_action is not None and obs.get("last_reward") is not None:
-            self._remember(self.last_action, obs["last_reward"])
-
-        acts = obs.get("available") or []
-        goal = obs.get("external_goal")
-        goal_event = None
-
-        if goal and goal in acts:
-            action = goal
-            self.steps_on_goal += 1
-        else:
-            # fallback как NoGoal
-            if self.rng.random() < 0.3 or not acts:
-                action = self.rng.choice(acts) if acts else None
-            else:
-                best = max(acts, key=lambda a: self._est(a))
-                action = best
-            self.steps_on_goal = 0
-
-        self.last_action = action
-        self.t = obs["t"]
-        return action, goal_event
-
-
-class SelfGoalAgent(BaseAgent):
-    """C. Сам формирует цель и держит её фиксированное время."""
-    def __init__(self, seed: int):
-        super().__init__(seed)
-        self.current_goal: Optional[str] = None
-        self.goal_born = 0
-        self.steps_on_goal = 0
-        self.goal_history = []
-
-    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
-        if self.last_action is not None and obs.get("last_reward") is not None:
-            self._remember(self.last_action, obs["last_reward"])
-
-        t = obs["t"]
-        acts = obs.get("available") or []
-        opened = obs.get("opened")
-        goal_event = None
-
-        # Формируем цель при открытии или если нет цели
-        if self.current_goal is None or self.current_goal not in acts:
-            candidates = [a for a in acts if a.startswith("P")]
-            if opened:
-                self.current_goal = opened
-                self.goal_born = t
-                self.steps_on_goal = 0
-                goal_event = {"kind": "goal", "target": opened, "reason": "opened", "born_t": t}
-            elif candidates and self.rng.random() < 0.4:
-                # выбираем по текущей оценке
-                target = max(candidates, key=lambda a: self._est(a) + self.rng.random() * 0.1)
-                self.current_goal = target
-                self.goal_born = t
-                self.steps_on_goal = 0
-                goal_event = {"kind": "goal", "target": target, "reason": "self_select", "born_t": t}
-
-        # Держим цель
-        if self.current_goal and self.current_goal in acts and self.steps_on_goal < 12:
-            action = self.current_goal
-            self.steps_on_goal += 1
-        else:
-            if self.current_goal and self.steps_on_goal >= 12:
-                goal_event = {"kind": "goal_abandon", "target": self.current_goal, "reason": "timeout"}
-                self.goal_history.append(self.current_goal)
-                self.current_goal = None
-            # исследование / greedy
-            probes = [a for a in acts if a.startswith("probe")]
-            if probes and self.rng.random() < 0.35:
-                action = self.rng.choice(probes)
-            elif acts:
-                action = max(acts, key=lambda a: self._est(a))
-            else:
-                action = None
-            self.steps_on_goal = 0
-
-        self.last_action = action
-        self.t = t
-        return action, goal_event
-
-
-class SelfGoalReviseAgent(BaseAgent):
-    """D. Формирует, пересматривает по ценности и отказывается."""
-    def __init__(self, seed: int):
-        super().__init__(seed)
-        self.current_goal: Optional[str] = None
-        self.goal_born = 0
-        self.steps_on_goal = 0
-        self.goal_value_at_birth = 0.0
-
-    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
-        if self.last_action is not None and obs.get("last_reward") is not None:
-            self._remember(self.last_action, obs["last_reward"])
-
-        t = obs["t"]
-        acts = obs.get("available") or []
-        opened = obs.get("opened")
-        status = obs.get("project_status") or {}
-        goal_event = None
-
-        # Пересмотр / отказ
-        if self.current_goal:
-            cur_est = self._est(self.current_goal)
-            # ищем заметно лучшую альтернативу
-            alts = [a for a in acts if a.startswith("P") and a != self.current_goal]
-            better = None
-            better_v = cur_est + 0.25
-            for a in alts:
-                v = self._est(a)
-                if v > better_v:
-                    better_v, better = v, a
-            if better:
-                goal_event = {"kind": "goal_revise", "from": self.current_goal, "to": better, "reason": "higher_value"}
-                self.current_goal = better
-                self.goal_born = t
-                self.steps_on_goal = 0
-                self.goal_value_at_birth = better_v
-            elif self.steps_on_goal > 5 and cur_est < 0.08:
-                goal_event = {"kind": "goal_abandon", "target": self.current_goal, "reason": "low_value"}
-                self.current_goal = None
-                self.steps_on_goal = 0
-            elif self.steps_on_goal > 16:
-                goal_event = {"kind": "goal_abandon", "target": self.current_goal, "reason": "timeout"}
-                self.current_goal = None
-                self.steps_on_goal = 0
-
-        # Формирование новой цели
-        if self.current_goal is None:
-            if opened:
-                self.current_goal = opened
-                self.goal_born = t
-                self.goal_value_at_birth = 0.5
-                goal_event = {"kind": "goal", "target": opened, "reason": "opened", "born_t": t}
-            else:
-                candidates = [a for a in acts if a.startswith("P")]
-                if candidates:
-                    # предпочитаем проекты с прогрессом или высокой оценкой
-                    def score(a):
-                        st = status.get(a, {})
-                        prog = st.get("progress", 0) / max(1, st.get("needed", 1))
-                        return self._est(a) + 0.4 * prog
-                    target = max(candidates, key=score)
-                    self.current_goal = target
-                    self.goal_born = t
-                    self.goal_value_at_birth = self._est(target)
-                    goal_event = {"kind": "goal", "target": target, "reason": "value_select", "born_t": t}
-
-        # Действие
-        if self.current_goal and self.current_goal in acts:
-            action = self.current_goal
-            self.steps_on_goal += 1
-        else:
-            probes = [a for a in acts if a.startswith("probe")]
-            if probes and self.rng.random() < 0.4:
-                action = self.rng.choice(probes)
-            elif acts:
-                action = max(acts, key=lambda a: self._est(a))
-            else:
-                action = None
-            self.steps_on_goal = 0
-
-        self.last_action = action
-        self.t = t
-        return action, goal_event
-
-
-class StickyHeuristic(BaseAgent):
-    """v0.6.1: КОНТРОЛЬ «обязательство без целей». Те же наблюдения, что у D (opened, progress),
-    правило «доделай начатое», но ни объекта цели, ни goal-событий."""
-    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
-        if self.last_action is not None and obs.get("last_reward") is not None:
-            self._remember(self.last_action, obs["last_reward"])
-        acts = obs.get("available") or []
-        stt = obs.get("project_status") or {}
-        pr = [k for k in acts if k.startswith("P")]
-        la = self.last_action
-        if la in pr and 0 < stt[la]["progress"] < stt[la]["needed"]:
-            a = la
-        elif pr and self.rng.random() < 0.85:
-            a = max(pr, key=lambda k: self._est(k) + 0.3 * stt[k]["progress"] / max(1, stt[k]["needed"])
-                    + self.rng.random() * 0.05)
-        else:
-            pb = [k for k in acts if k.startswith("probe")]
-            a = self.rng.choice(pb) if pb and self.rng.random() < 0.5 else self.rng.choice(acts)
-        self.last_action = a
+            a = max(acts, key=lambda x: self.est(x))
+        self.last = a
         self.t = obs["t"]
         return a, None
 
 
-class OracleNoGoal(BaseAgent):
-    """v0.6.1: ПОТОЛОК. Использует привилегированный payoff/needed из obs; без целей."""
+class StickyAgent(Base):
+    """B. Упорство без целей: доделывает начатый проект."""
+    def __init__(self, seed: int):
+        super().__init__(seed)
+        self.current: Optional[str] = None
+        self.steps = 0
+
     def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
-        stt = obs.get("project_status") or {}
-        pr = [k for k in (obs.get("available") or []) if k.startswith("P")]
+        if self.last and obs.get("last_reward") is not None:
+            self.remember(self.last, obs["last_reward"])
+        acts = obs.get("available") or []
+        status = obs.get("project_status") or {}
+
+        # Если текущий проект ещё жив и не закончен — продолжаем
+        if self.current and self.current in acts:
+            st = status.get(self.current, {})
+            if st.get("alive", True) and st.get("progress", 0) < st.get("needed", 99):
+                self.steps += 1
+                self.last = self.current
+                self.t = obs["t"]
+                return self.current, None
+
+        # Иначе выбираем новый
+        projects = [a for a in acts if a.startswith("P")]
+        probes = [a for a in acts if a.startswith("probe")]
+        if projects and self.rng.random() < 0.7:
+            # предпочитаем уже начатые
+            def score(a):
+                st = status.get(a, {})
+                return self.est(a) + 0.5 * (st.get("progress", 0) / max(1, st.get("needed", 1)))
+            self.current = max(projects, key=score)
+        elif probes and self.rng.random() < 0.4:
+            self.current = self.rng.choice(probes)
+        elif acts:
+            self.current = max(acts, key=lambda x: self.est(x))
+        else:
+            self.current = None
+
+        self.steps = 0
+        self.last = self.current
         self.t = obs["t"]
-        if not pr:
-            return None, None
-        return max(pr, key=lambda k: stt[k]["payoff"] / stt[k]["needed"]), None
+        return self.current, None
+
+
+class ExternalGoalAgent(Base):
+    """C. Внешняя цель. Harness даёт только имя открытого проекта, без payoff."""
+    def __init__(self, seed: int):
+        super().__init__(seed)
+        self.steps = 0
+
+    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
+        if self.last and obs.get("last_reward") is not None:
+            self.remember(self.last, obs["last_reward"])
+        acts = obs.get("available") or []
+        goal = obs.get("external_goal")  # только имя, без ценности
+
+        if goal and goal in acts:
+            self.steps += 1
+            self.last = goal
+            self.t = obs["t"]
+            return goal, None
+
+        # fallback
+        a = max(acts, key=lambda x: self.est(x)) if acts else None
+        self.steps = 0
+        self.last = a
+        self.t = obs["t"]
+        return a, None
+
+
+class SelfGoalAgent(Base):
+    """D. Сам ставит цель и держит (без умного пересмотра)."""
+    def __init__(self, seed: int):
+        super().__init__(seed)
+        self.goal: Optional[str] = None
+        self.steps = 0
+
+    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
+        if self.last and obs.get("last_reward") is not None:
+            self.remember(self.last, obs["last_reward"])
+        t = obs["t"]
+        acts = obs.get("available") or []
+        opened = obs.get("opened")
+        status = obs.get("project_status") or {}
+        ge = None
+
+        if self.goal is None or self.goal not in acts or not status.get(self.goal, {}).get("alive", True):
+            if opened:
+                self.goal = opened
+                self.steps = 0
+                ge = {"kind": "goal", "target": opened, "reason": "opened", "born_t": t}
+            else:
+                cands = [a for a in acts if a.startswith("P")]
+                if cands:
+                    self.goal = max(cands, key=lambda a: self.est(a) + 0.3 * status.get(a, {}).get("progress", 0))
+                    self.steps = 0
+                    ge = {"kind": "goal", "target": self.goal, "reason": "self", "born_t": t}
+
+        if self.goal and self.goal in acts and status.get(self.goal, {}).get("alive", True):
+            self.steps += 1
+            self.last = self.goal
+            self.t = t
+            return self.goal, ge
+
+        # исследование
+        probes = [a for a in acts if a.startswith("probe")]
+        a = self.rng.choice(probes) if probes and self.rng.random() < 0.35 else (
+            max(acts, key=lambda x: self.est(x)) if acts else None)
+        self.last = a
+        self.t = t
+        return a, ge
+
+
+class SelfGoalReviseAgent(Base):
+    """E. Сам ставит + пересматривает + отказывается по наблюдаемой ценности."""
+    def __init__(self, seed: int):
+        super().__init__(seed)
+        self.goal: Optional[str] = None
+        self.steps = 0
+        self.value_at_birth = 0.0
+
+    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
+        if self.last and obs.get("last_reward") is not None:
+            self.remember(self.last, obs["last_reward"])
+        t = obs["t"]
+        acts = obs.get("available") or []
+        opened = obs.get("opened")
+        status = obs.get("project_status") or {}
+        ge = None
+
+        # --- Пересмотр / отказ ---
+        if self.goal:
+            alive = status.get(self.goal, {}).get("alive", False)
+            cur = self.est(self.goal)
+            if not alive:
+                ge = {"kind": "goal_abandon", "target": self.goal, "reason": "dead"}
+                self.goal = None
+                self.steps = 0
+            else:
+                # ищем заметно лучший живой проект
+                alts = [a for a in acts if a.startswith("P") and a != self.goal
+                        and status.get(a, {}).get("alive", True)]
+                better = None
+                best_v = cur + 0.22
+                for a in alts:
+                    v = self.est(a) + 0.25 * (status.get(a, {}).get("progress", 0) /
+                                              max(1, status.get(a, {}).get("needed", 1)))
+                    if v > best_v:
+                        best_v, better = v, a
+                if better:
+                    ge = {"kind": "goal_revise", "from": self.goal, "to": better, "reason": "higher_value"}
+                    self.goal = better
+                    self.steps = 0
+                    self.value_at_birth = best_v
+                elif self.steps > 6 and cur < 0.06:
+                    ge = {"kind": "goal_abandon", "target": self.goal, "reason": "low_value"}
+                    self.goal = None
+                    self.steps = 0
+                elif self.steps > 18:
+                    ge = {"kind": "goal_abandon", "target": self.goal, "reason": "timeout"}
+                    self.goal = None
+                    self.steps = 0
+
+        # --- Формирование ---
+        if self.goal is None:
+            if opened and status.get(opened, {}).get("alive", True):
+                self.goal = opened
+                self.steps = 0
+                self.value_at_birth = 0.4
+                ge = {"kind": "goal", "target": opened, "reason": "opened", "born_t": t}
+            else:
+                cands = [a for a in acts if a.startswith("P") and status.get(a, {}).get("alive", True)]
+                if cands:
+                    def score(a):
+                        st = status.get(a, {})
+                        return self.est(a) + 0.45 * (st.get("progress", 0) / max(1, st.get("needed", 1)))
+                    self.goal = max(cands, key=score)
+                    self.steps = 0
+                    self.value_at_birth = self.est(self.goal)
+                    ge = {"kind": "goal", "target": self.goal, "reason": "value_select", "born_t": t}
+
+        # --- Действие ---
+        if self.goal and self.goal in acts and status.get(self.goal, {}).get("alive", True):
+            self.steps += 1
+            self.last = self.goal
+            self.t = t
+            return self.goal, ge
+
+        probes = [a for a in acts if a.startswith("probe")]
+        a = self.rng.choice(probes) if probes and self.rng.random() < 0.4 else (
+            max(acts, key=lambda x: self.est(x)) if acts else None)
+        self.last = a
+        self.t = t
+        return a, ge

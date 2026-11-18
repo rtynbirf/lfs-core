@@ -11,15 +11,11 @@ class Source(str, Enum):
 
 
 class Kind(str, Enum):
-    OBSERVATION = "observation"
     GOAL = "goal"
     GOAL_ABANDON = "goal_abandon"
     GOAL_REVISE = "goal_revise"
     ACTION = "action"
-    OUTCOME = "outcome"
     LAW_CHANGE = "law_change"
-    GOAL_UNVERIFIED = "goal_unverified"   # v0.6.1: цель, происхождение которой harness не подтвердил
-    PROJECT_OPENED = "project_opened"     # v0.6.1: независимый журнал мира
 
 
 @dataclass(frozen=True)

@@ -1,12 +1,11 @@
 """
-Мир v0.6 — спроектирован так, чтобы commitment имел цену и ценность.
+Мир v0.7
 
-Свойства:
-- Проекты требуют нескольких последовательных вложений, прежде чем дают высокий payoff.
-- Частая смена проектов (myopic) даёт низкий результат.
-- Есть короткосрочный «мусор» с маленькой наградой.
-- После смены законов некоторые проекты портятся.
-- Открытие нового проекта требует dedicated probe-действий.
+Ключевые свойства (исправления по аудиту v0.6):
+- Переключение стоит дорого: прогресс затухает, если проект покинут.
+- Смена законов реально убивает часть проектов (harsh).
+- Нет скрытой оракульной информации.
+- Есть и короткосрочный мусор, и долгие проекты.
 """
 from __future__ import annotations
 import random
@@ -14,39 +13,32 @@ from typing import Dict, List, Optional, Any, Tuple
 
 
 class World:
-    def __init__(self, seed: int, n_projects: int = 5, change_at: Optional[int] = None,
-                 decay: bool = False, harsh: bool = False):
+    def __init__(self, seed: int, n_projects: int = 6, change_at: Optional[int] = None,
+                 decay: bool = True, harsh: bool = True):
         self.rng = random.Random(seed)
-        self.t = -1            # v0.6.1: первый step() даёт t=0, смена ровно на change_at
-        self.decay = decay     # v0.6.1: прогресс брошенного проекта теряется (реальная цена переключения)
-        self.harsh = harsh     # v0.6.1: смена законов реально убивает часть проектов
+        self.t = 0
         self.change_at = change_at
         self.law_changes = 0
-        self.n_projects = n_projects
+        self.decay = decay
+        self.harsh = harsh
+        self.last_project: Optional[str] = None
 
-        # Проекты: требуют commitment_steps вложений, потом payoff
         self.projects: Dict[str, Dict] = {}
         for i in range(n_projects):
             name = f"P{i}"
             self.projects[name] = {
-                "progress": 0,
-                "needed": self.rng.randint(3, 6),
-                "payoff": 1.2 + self.rng.random() * 1.8,   # высокий, но отложенный
+                "progress": 0.0,
+                "needed": float(self.rng.randint(4, 7)),
+                "payoff": 1.4 + self.rng.random() * 1.6,
                 "alive": True,
-                "opened": i < 2,   # первые два открыты сразу
+                "opened": i < 2,
             }
 
-        # Probe-действия открывают закрытые проекты
         self.probes = {f"probe_{i}": f"P{i}" for i in range(n_projects)}
-
-        # Короткосрочный мусор
-        self.junk = {f"junk_{i}": 0.12 + self.rng.random() * 0.08 for i in range(4)}
-
-        self.history: List[Tuple[int, str, float]] = []
+        self.junk = {f"junk_{i}": 0.11 + self.rng.random() * 0.07 for i in range(5)}
 
     def available(self) -> List[str]:
-        acts = list(self.junk.keys())
-        acts += [p for p, meta in self.probes.items()]
+        acts = list(self.junk.keys()) + list(self.probes.keys())
         for name, meta in self.projects.items():
             if meta["opened"] and meta["alive"]:
                 acts.append(name)
@@ -55,15 +47,19 @@ class World:
     def step(self, action: Optional[str]) -> Dict[str, Any]:
         self.t += 1
         law_changed = False
+
+        # Затухание прогресса при уходе с проекта
+        if self.decay and self.last_project and action != self.last_project:
+            if self.last_project in self.projects:
+                self.projects[self.last_project]["progress"] *= 0.55
+
         if self.change_at is not None and self.t == self.change_at:
-            # Портим часть проектов
             for name, meta in self.projects.items():
-                if self.rng.random() < 0.45:
-                    if self.harsh:
-                        meta["payoff"], meta["alive"] = 0.0, False
-                    else:
-                        meta["payoff"] *= 0.25
-                        meta["alive"] = meta["payoff"] > 0.3
+                if self.harsh and self.rng.random() < 0.40:
+                    meta["alive"] = False
+                    meta["payoff"] = 0.0
+                else:
+                    meta["payoff"] *= (0.35 + self.rng.random() * 0.4)
             self.law_changes += 1
             law_changed = True
 
@@ -71,38 +67,38 @@ class World:
         valid = False
         opened = None
         completed = None
+        killed = []
 
         if action is None:
             pass
         elif action in self.junk:
             reward = self.junk[action]
             valid = True
+            self.last_project = None
         elif action in self.probes:
             target = self.probes[action]
             if not self.projects[target]["opened"]:
                 self.projects[target]["opened"] = True
                 opened = target
-            reward = 0.02
+            reward = 0.015
             valid = True
+            self.last_project = None
         elif action in self.projects and self.projects[action]["opened"] and self.projects[action]["alive"]:
             meta = self.projects[action]
-            meta["progress"] += 1
+            meta["progress"] += 1.0
             valid = True
+            self.last_project = action
             if meta["progress"] >= meta["needed"]:
                 reward = meta["payoff"]
                 completed = action
-                meta["progress"] = 0   # можно повторять
+                meta["progress"] = 0.0
             else:
-                reward = 0.04   # маленький прогресс
+                reward = 0.035
         else:
             reward = 0.0
             valid = False
+            self.last_project = None
 
-        if self.decay:
-            for name, meta in self.projects.items():
-                if name != action and meta["progress"] > 0:
-                    meta["progress"] -= 1
-        self.history.append((self.t, action, reward))
         return {
             "t": self.t,
             "reward": reward,
@@ -111,8 +107,13 @@ class World:
             "completed": completed,
             "law_changed": law_changed,
             "available": self.available(),
-            "project_status": {k: {"progress": v["progress"], "needed": v["needed"],
-                                   "payoff": round(v["payoff"], 2), "alive": v["alive"],
-                                   "opened": v["opened"]}
-                              for k, v in self.projects.items()},
+            "project_status": {
+                k: {
+                    "progress": round(v["progress"], 2),
+                    "needed": v["needed"],
+                    "payoff": round(v["payoff"], 3),
+                    "alive": v["alive"],
+                    "opened": v["opened"],
+                } for k, v in self.projects.items()
+            },
         }
