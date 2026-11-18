@@ -1,24 +1,25 @@
 #!/usr/bin/env python3
-"""LFS CORE v0.5 — Goal Genesis demo"""
+"""LFS CORE v0.6 — Goal Necessity ablation"""
 from lfs_core import autonomy as A
-from lfs_core.agents import RandomAgent, ReactiveAgent, GoalAgent
+from lfs_core.agents import NoGoalAgent, ExternalGoalAgent, SelfGoalAgent, SelfGoalReviseAgent
 
-print("=== Pre-registered thresholds: margin=0.10, min_pass_rate=0.85 ===\n")
+print("=== Pre-registered: margin=0.08, min_pass_rate=0.80, STEPS=60 ===\n")
 
 print("--- Без смены законов ---")
-for cls in (RandomAgent, ReactiveAgent, GoalAgent):
+for name, cls in [("A_NoGoal", NoGoalAgent), ("B_External", ExternalGoalAgent),
+                  ("C_SelfGoal", SelfGoalAgent), ("D_SelfRevise", SelfGoalReviseAgent)]:
     r = A.evaluate(cls, change_at=None)
-    print(f"{cls.__name__:15s} {r['verdict']:12s}  q={r['quality']:.3f}  base={r['baseline_random']:.3f}  "
-          f"goals={r['avg_internal_goals']:.1f}  disc={r['avg_discovered']:.1f}")
+    print(f"{name:15s} {r['verdict']:12s}  q={r['quality']:.3f}  Δ={r['delta']:+.3f}  "
+          f"goals={r['avg_goals']:.1f}  rev={r['avg_revises']:.1f}  done={r['avg_completed']:.1f}")
 
-print("\n--- Со сменой законов (t=22) ---")
-for cls in (RandomAgent, ReactiveAgent, GoalAgent):
-    r = A.evaluate(cls, change_at=22)
-    print(f"{cls.__name__:15s} {r['verdict']:12s}  q={r['quality']:.3f}  base={r['baseline_random']:.3f}  "
-          f"goals={r['avg_internal_goals']:.1f}  disc={r['avg_discovered']:.1f}")
+print("\n--- Со сменой законов (t=30) ---")
+for name, cls in [("A_NoGoal", NoGoalAgent), ("B_External", ExternalGoalAgent),
+                  ("C_SelfGoal", SelfGoalAgent), ("D_SelfRevise", SelfGoalReviseAgent)]:
+    r = A.evaluate(cls, change_at=30)
+    print(f"{name:15s} {r['verdict']:12s}  q={r['quality']:.3f}  Δ={r['delta']:+.3f}  "
+          f"goals={r['avg_goals']:.1f}  rev={r['avg_revises']:.1f}  done={r['avg_completed']:.1f}")
 
-print("\n--- Пример происхождения целей (GoalAgent, seed=7) ---")
-rep = A.goal_origin_report(GoalAgent, seed=7)
-print(f"goals formed: {rep['n_goals']}, abandoned: {rep['n_abandons']}, quality={rep['quality']}, discovered={rep['discovered']}")
-for g in rep["goals"][:5]:
-    print("  ", g)
+print("\n--- Полный ablation report (change_at=30) ---")
+rep = A.ablation_report(change_at=30)
+for k, v in rep.items():
+    print(f"{k:18s} q={v['quality']:.3f}  Δ={v['delta']:+.3f}  verdict={v['verdict']}")

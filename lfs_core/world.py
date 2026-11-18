@@ -1,61 +1,51 @@
 """
-Мир v0.5 — без заранее заданной задачи.
+Мир v0.6 — спроектирован так, чтобы commitment имел цену и ценность.
 
 Свойства:
-- Несколько возможных «направлений» (каналов).
-- Часть действий бесполезна.
-- Часть действий открывает новые каналы (discovery).
-- Законы могут меняться.
-- Нет внешней инструкции «что делать».
+- Проекты требуют нескольких последовательных вложений, прежде чем дают высокий payoff.
+- Частая смена проектов (myopic) даёт низкий результат.
+- Есть короткосрочный «мусор» с маленькой наградой.
+- После смены законов некоторые проекты портятся.
+- Открытие нового проекта требует dedicated probe-действий.
 """
 from __future__ import annotations
 import random
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 
 class World:
-    def __init__(self, seed: int, n_base: int = 10, change_at: Optional[int] = None):
+    def __init__(self, seed: int, n_projects: int = 5, change_at: Optional[int] = None):
         self.rng = random.Random(seed)
-        self.t = -1          # v0.5.1: первый step() даёт t=0, смена ровно на change_at
+        self.t = 0
         self.change_at = change_at
         self.law_changes = 0
+        self.n_projects = n_projects
 
-        # Базовые каналы (всегда доступны)
-        self.channels: Dict[str, Dict[str, float]] = {
-            "idle": {"value": 0.05, "cost": 0.0, "opens": None},
-            "noise": {"value": 0.02, "cost": 0.0, "opens": None},
-        }
-
-        # Полезные, но скрытые до обнаружения
-        self.hidden: Dict[str, Dict[str, float]] = {}
-        for i in range(n_base):
-            name = f"res_{i}"
-            self.hidden[name] = {
-                "value": 0.3 + self.rng.random() * 0.55,
-                "cost": 0.05 + self.rng.random() * 0.1,
-                "opens": None,
+        # Проекты: требуют commitment_steps вложений, потом payoff
+        self.projects: Dict[str, Dict] = {}
+        for i in range(n_projects):
+            name = f"P{i}"
+            self.projects[name] = {
+                "progress": 0,
+                "needed": self.rng.randint(3, 6),
+                "payoff": 1.2 + self.rng.random() * 1.8,   # высокий, но отложенный
+                "alive": True,
+                "opened": i < 2,   # первые два открыты сразу
             }
 
-        # Действия-открыватели: некоторые «бесполезные» действия могут открыть канал
-        self.discoverers: Dict[str, str] = {}
-        hidden_names = list(self.hidden.keys())
-        self.rng.shuffle(hidden_names)
-        for i, name in enumerate(hidden_names[: max(3, n_base // 3)]):
-            disc = f"probe_{i}"
-            self.discoverers[disc] = name
-            self.channels[disc] = {"value": 0.01, "cost": 0.08, "opens": name}
+        # Probe-действия открывают закрытые проекты
+        self.probes = {f"probe_{i}": f"P{i}" for i in range(n_projects)}
 
-        # Бесполезные действия
-        for i in range(6):
-            self.channels[f"junk_{i}"] = {"value": 0.0, "cost": 0.03, "opens": None}
+        # Короткосрочный мусор
+        self.junk = {f"junk_{i}": 0.12 + self.rng.random() * 0.08 for i in range(4)}
 
-        self.opened: set = set()
         self.history: List[Tuple[int, str, float]] = []
 
-    def available_actions(self) -> List[str]:
-        acts = list(self.channels.keys())
-        for name in self.opened:
-            if name in self.hidden:
+    def available(self) -> List[str]:
+        acts = list(self.junk.keys())
+        acts += [p for p, meta in self.probes.items()]
+        for name, meta in self.projects.items():
+            if meta["opened"] and meta["alive"]:
                 acts.append(name)
         return acts
 
@@ -63,32 +53,42 @@ class World:
         self.t += 1
         law_changed = False
         if self.change_at is not None and self.t == self.change_at:
-            # Меняем ценности открытых ресурсов
-            for name in list(self.hidden.keys()):
-                if name in self.opened or name in self.hidden:
-                    self.hidden[name]["value"] = max(0.0, self.hidden[name]["value"] + self.rng.uniform(-0.35, 0.35))
+            # Портим часть проектов
+            for name, meta in self.projects.items():
+                if self.rng.random() < 0.45:
+                    meta["payoff"] *= 0.25
+                    meta["alive"] = meta["payoff"] > 0.3
             self.law_changes += 1
             law_changed = True
 
         reward = 0.0
-        opened_new = None
         valid = False
+        opened = None
+        completed = None
 
         if action is None:
-            reward = 0.0
-        elif action in self.channels:
-            meta = self.channels[action]
-            reward = meta["value"] - meta["cost"]
+            pass
+        elif action in self.junk:
+            reward = self.junk[action]
             valid = True
-            if meta["opens"] and meta["opens"] not in self.opened:
-                self.opened.add(meta["opens"])
-                opened_new = meta["opens"]
-        elif action in self.opened and action in self.hidden:
-            meta = self.hidden[action]
-            reward = meta["value"] - meta["cost"]
+        elif action in self.probes:
+            target = self.probes[action]
+            if not self.projects[target]["opened"]:
+                self.projects[target]["opened"] = True
+                opened = target
+            reward = 0.02
             valid = True
+        elif action in self.projects and self.projects[action]["opened"] and self.projects[action]["alive"]:
+            meta = self.projects[action]
+            meta["progress"] += 1
+            valid = True
+            if meta["progress"] >= meta["needed"]:
+                reward = meta["payoff"]
+                completed = action
+                meta["progress"] = 0   # можно повторять
+            else:
+                reward = 0.04   # маленький прогресс
         else:
-            # недопустимое действие
             reward = 0.0
             valid = False
 
@@ -97,20 +97,12 @@ class World:
             "t": self.t,
             "reward": reward,
             "valid": valid,
-            "opened": opened_new,
+            "opened": opened,
+            "completed": completed,
             "law_changed": law_changed,
-            "available": self.available_actions(),
+            "available": self.available(),
+            "project_status": {k: {"progress": v["progress"], "needed": v["needed"],
+                                   "payoff": round(v["payoff"], 2), "alive": v["alive"],
+                                   "opened": v["opened"]}
+                              for k, v in self.projects.items()},
         }
-
-    def true_best_open(self) -> Optional[str]:
-        best, best_v = None, -1e9
-        for a in self.available_actions():
-            if a in self.channels:
-                v = self.channels[a]["value"] - self.channels[a]["cost"]
-            elif a in self.hidden:
-                v = self.hidden[a]["value"] - self.hidden[a]["cost"]
-            else:
-                continue
-            if v > best_v:
-                best_v, best = v, a
-        return best

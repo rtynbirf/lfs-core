@@ -1,7 +1,6 @@
-"""Событие. Происхождение цели и действия определяет ТОЛЬКО harness."""
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Tuple, Optional
+from typing import Any, Tuple
 
 
 class Source(str, Enum):
@@ -13,14 +12,12 @@ class Source(str, Enum):
 
 class Kind(str, Enum):
     OBSERVATION = "observation"
-    GOAL = "goal"                # цель, порождённая системой
+    GOAL = "goal"
+    GOAL_ABANDON = "goal_abandon"
+    GOAL_REVISE = "goal_revise"
     ACTION = "action"
     OUTCOME = "outcome"
     LAW_CHANGE = "law_change"
-    GOAL_ABANDON = "goal_abandon"
-    GOAL_REVISE = "goal_revise"
-    GOAL_UNVERIFIED = "goal_unverified"   # v0.5.1: цель без подтверждения происхождения harness'ом
-    CHANNEL_OPENED = "channel_opened"     # v0.5.1: независимый журнал мира
 
 
 @dataclass(frozen=True)
@@ -30,8 +27,4 @@ class Event:
     source: Source
     kind: Kind
     payload: Any = None
-    confidence: float = 1.0
     parents: Tuple[int, ...] = field(default_factory=tuple)
-
-    def is_internal_goal(self) -> bool:
-        return self.kind is Kind.GOAL and self.source is Source.PID1_INTERNAL
