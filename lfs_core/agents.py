@@ -210,3 +210,31 @@ class GoalAgent:
             self.explored.add(action)
         self.last_action = action
         return action, goal_event
+
+
+class GreedyExplorer:
+    """v0.5.1: КОНТРОЛЬ БЕЗ ЦЕЛЕЙ. Те же сенсоры и тот же опыт, что у GoalAgent,
+    но без goal-событий: сначала непробованное, иначе лучшее по оценке."""
+    def __init__(self, seed: int):
+        self.log = ExperienceLog(half_life=55.0)
+        self.rng = random.Random(seed + 29)
+        self.last_action: Optional[str] = None
+        self.tried: set = set()
+
+    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
+        t, reward, acts = obs["t"], obs.get("last_reward"), obs.get("available") or []
+        if self.last_action is not None and reward is not None:
+            self.log.add(Record(t - 1, "w", self.last_action, reward, Source.PID1_INTERNAL))
+        if not acts:
+            return None, None
+        untried = [a for a in acts if a not in self.tried]
+        if untried and self.rng.random() < 0.55:
+            action = self.rng.choice(untried)
+        else:
+            def val(a):
+                e = self.log.estimate("w", a, t)
+                return e if e is not None else 0.0
+            action = max(acts, key=val)
+        self.tried.add(action)
+        self.last_action = action
+        return action, None

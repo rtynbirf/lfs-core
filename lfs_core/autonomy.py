@@ -11,7 +11,7 @@ import statistics
 from typing import Type, Dict, Any, List, Optional
 from .world import World
 from .event import Event, Source, Kind
-from .agents import RandomAgent, ReactiveAgent, GoalAgent
+from .agents import RandomAgent, ReactiveAgent, GoalAgent, GreedyExplorer
 
 
 # --- Pre-registered thresholds ---
@@ -28,80 +28,76 @@ def run_episode(agent_cls: Type,
     agent = agent_cls(seed)
 
     events: List[Event] = []
-    total_reward = 0.0
-    internal_goals = 0
-    abandoned_goals = 0
-    discovered_channels = 0
+    opened_ev: Dict[str, int] = {}          # НЕЗАВИСИМЫЙ журнал: канал -> id события открытия (пишет harness)
+    total_reward = post_reward = 0.0
+    internal_goals = unverified_goals = abandoned_goals = discovered_channels = 0
     last_reward = None
     last_opened = None
+    available = world.available_actions()
 
     for t in range(STEPS):
-        obs = {
-            "t": t,
-            "available": world.available_actions(),
-            "last_reward": last_reward,
-            "opened": last_opened,
-        }
+        obs = {"t": t, "available": available, "last_reward": last_reward, "opened": last_opened}
         action, goal_info = agent.step(obs)
 
-        # --- Goal events (harness records origin) ---
         if goal_info:
-            if goal_info.get("kind") == "goal":
-                ev = Event(
-                    id=len(events), t=t,
-                    source=Source.PID1_INTERNAL,
-                    kind=Kind.GOAL,
-                    payload=goal_info,
-                    parents=()
-                )
-                events.append(ev)
-                internal_goals += 1
-            elif goal_info.get("kind") == "goal_abandon":
-                ev = Event(
-                    id=len(events), t=t,
-                    source=Source.PID1_INTERNAL,
-                    kind=Kind.GOAL_ABANDON,
-                    payload=goal_info,
-                    parents=()
-                )
-                events.append(ev)
+            kind = goal_info.get("kind")
+            if kind == "goal":
+                # v0.5.1: происхождение цели подтверждает harness по своему журналу, а не по самоотчёту.
+                tgt = goal_info.get("target")
+                verified = (tgt in opened_ev and tgt in available
+                            and goal_info.get("reason") == f"opened_channel:{tgt}")
+                if verified:
+                    events.append(Event(len(events), t, Source.PID1_INTERNAL, Kind.GOAL, goal_info,
+                                        parents=(opened_ev[tgt],)))
+                    internal_goals += 1
+                else:
+                    events.append(Event(len(events), t, Source.UNKNOWN, Kind.GOAL_UNVERIFIED, goal_info))
+                    unverified_goals += 1
+            elif kind == "goal_abandon":
+                events.append(Event(len(events), t, Source.PID1_INTERNAL, Kind.GOAL_ABANDON, goal_info))
                 abandoned_goals += 1
 
-        # --- Action ---
         result = world.step(action)
-        last_reward = result["reward"]
-        last_opened = result["opened"]
-        total_reward += result["reward"]   # честная метрика: invalid = 0
-
-        if result["opened"]:
-            discovered_channels += 1
+        last_reward, last_opened = result["reward"], result["opened"]
+        available = result["available"]
+        total_reward += result["reward"]
+        if change_at is not None and t >= change_at:
+            post_reward += result["reward"]
 
         src = Source.PID1_INTERNAL if action is not None else Source.UNKNOWN
-        events.append(Event(
-            id=len(events), t=t,
-            source=src,
-            kind=Kind.ACTION,
-            payload={"action": action, "valid": result["valid"]},
-            parents=(events[-1].id,) if events else ()
-        ))
-
+        events.append(Event(len(events), t, src, Kind.ACTION,
+                            {"action": action, "valid": result["valid"]},
+                            parents=(events[-1].id,) if events else ()))
+        if result["opened"]:
+            discovered_channels += 1
+            opened_ev[result["opened"]] = len(events)
+            events.append(Event(len(events), t, Source.PID0_ENV, Kind.CHANNEL_OPENED, result["opened"],
+                                parents=(events[-1].id,)))
         if result["law_changed"]:
-            events.append(Event(
-                id=len(events), t=t,
-                source=Source.PID0_ENV,
-                kind=Kind.LAW_CHANGE,
-                payload={"law_changes": world.law_changes}
-            ))
+            events.append(Event(len(events), t, Source.PID0_ENV, Kind.LAW_CHANGE,
+                                {"law_changes": world.law_changes}))
 
-    quality = total_reward / STEPS
     return {
-        "quality": quality,
+        "quality": total_reward / STEPS,
+        "post_quality": (post_reward / (STEPS - change_at)) if change_at is not None else None,
         "internal_goals": internal_goals,
+        "unverified_goals": unverified_goals,
         "abandoned_goals": abandoned_goals,
         "discovered_channels": discovered_channels,
         "events": events,
         "law_changes": world.law_changes,
     }
+
+
+def oracle_quality(seed: int, change_at: Optional[int] = None, n_base: int = 10) -> float:
+    """Потолок: сразу открыть все каналы-открыватели, затем брать лучший доступный."""
+    w = World(seed, n_base=n_base, change_at=change_at)
+    plan = [a for a in w.channels if a.startswith("probe_")]
+    tot = 0.0
+    for _ in range(STEPS):
+        a = plan.pop(0) if plan else w.true_best_open()
+        tot += w.step(a)["reward"]
+    return tot / STEPS
 
 
 def evaluate(agent_cls: Type,
@@ -118,6 +114,9 @@ def evaluate(agent_cls: Type,
     goals = statistics.fmean(r["internal_goals"] for r in results)
     abandons = statistics.fmean(r["abandoned_goals"] for r in results)
     discovered = statistics.fmean(r["discovered_channels"] for r in results)
+    unver = statistics.fmean(r["unverified_goals"] for r in results)
+    orc = statistics.fmean(oracle_quality(s, change_at, n_base) for s in seeds)
+    post = [r["post_quality"] for r in results if r["post_quality"] is not None]
 
     return {
         "baseline_random": round(base, 3),
@@ -126,6 +125,9 @@ def evaluate(agent_cls: Type,
         "avg_internal_goals": round(goals, 2),
         "avg_abandoned": round(abandons, 2),
         "avg_discovered": round(discovered, 2),
+        "avg_unverified_goals": round(unver, 2),
+        "share_of_oracle": round(q / orc, 3),
+        "post_change_quality": round(statistics.fmean(post), 3) if post else None,
         "verdict": "NOT_REFUTED" if pass_rate >= MIN_PASS_RATE else "REFUTED",
         "change_at": change_at,
     }
@@ -143,3 +145,13 @@ def goal_origin_report(agent_cls: Type = GoalAgent, seed: int = 0) -> Dict[str, 
         "quality": round(ep["quality"], 3),
         "discovered": ep["discovered_channels"],
     }
+
+
+def goals_ablation(seeds=range(30), change_at: Optional[int] = None) -> Dict[str, Any]:
+    """Дают ли цели функциональную пользу? GoalAgent против GreedyExplorer (те же сенсоры, без целей).
+    Критерий зафиксирован: цели полезны, только если q_goal >= q_greedy + MARGIN."""
+    g = evaluate(GoalAgent, seeds, change_at)
+    c = evaluate(GreedyExplorer, seeds, change_at)
+    d = g["quality"] - c["quality"]
+    return {"q_goal": g["quality"], "q_greedy": c["quality"], "delta": round(d, 3),
+            "verdict": "GOALS_ADD_VALUE" if d >= MARGIN else "NO_FUNCTIONAL_VALUE"}

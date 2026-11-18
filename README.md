@@ -1,4 +1,4 @@
-# LFS CORE v0.5 — Goal Genesis
+# LFS CORE v0.5.1 — Goal Genesis (патч v0.5 по аудиту, см. AUDIT.md)
 
 Фокус: **самостоятельное формирование целей**.
 
@@ -27,3 +27,8 @@
 python3 -m unittest discover -s tests -v
 python3 run_demo.py
 ```
+
+## v0.5.1
+- Происхождение цели подтверждает harness по независимому журналу (`CHANNEL_OPENED`), самоотчёт агента не принимается.
+- Контроль без целей `GreedyExplorer` и `goals_ablation()`: цели полезны только при `delta >= MARGIN`.
+- Метрики `share_of_oracle`, `post_change_quality`, `avg_unverified_goals`.

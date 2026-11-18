@@ -19,6 +19,8 @@ class Kind(str, Enum):
     LAW_CHANGE = "law_change"
     GOAL_ABANDON = "goal_abandon"
     GOAL_REVISE = "goal_revise"
+    GOAL_UNVERIFIED = "goal_unverified"   # v0.5.1: цель без подтверждения происхождения harness'ом
+    CHANNEL_OPENED = "channel_opened"     # v0.5.1: независимый журнал мира
 
 
 @dataclass(frozen=True)

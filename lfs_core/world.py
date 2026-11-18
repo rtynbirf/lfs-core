@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple, Any
 class World:
     def __init__(self, seed: int, n_base: int = 10, change_at: Optional[int] = None):
         self.rng = random.Random(seed)
-        self.t = 0
+        self.t = -1          # v0.5.1: первый step() даёт t=0, смена ровно на change_at
         self.change_at = change_at
         self.law_changes = 0
 
