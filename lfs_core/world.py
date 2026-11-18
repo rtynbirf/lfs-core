@@ -14,9 +14,12 @@ from typing import Dict, List, Optional, Any, Tuple
 
 
 class World:
-    def __init__(self, seed: int, n_projects: int = 5, change_at: Optional[int] = None):
+    def __init__(self, seed: int, n_projects: int = 5, change_at: Optional[int] = None,
+                 decay: bool = False, harsh: bool = False):
         self.rng = random.Random(seed)
-        self.t = 0
+        self.t = -1            # v0.6.1: первый step() даёт t=0, смена ровно на change_at
+        self.decay = decay     # v0.6.1: прогресс брошенного проекта теряется (реальная цена переключения)
+        self.harsh = harsh     # v0.6.1: смена законов реально убивает часть проектов
         self.change_at = change_at
         self.law_changes = 0
         self.n_projects = n_projects
@@ -56,8 +59,11 @@ class World:
             # Портим часть проектов
             for name, meta in self.projects.items():
                 if self.rng.random() < 0.45:
-                    meta["payoff"] *= 0.25
-                    meta["alive"] = meta["payoff"] > 0.3
+                    if self.harsh:
+                        meta["payoff"], meta["alive"] = 0.0, False
+                    else:
+                        meta["payoff"] *= 0.25
+                        meta["alive"] = meta["payoff"] > 0.3
             self.law_changes += 1
             law_changed = True
 
@@ -92,6 +98,10 @@ class World:
             reward = 0.0
             valid = False
 
+        if self.decay:
+            for name, meta in self.projects.items():
+                if name != action and meta["progress"] > 0:
+                    meta["progress"] -= 1
         self.history.append((self.t, action, reward))
         return {
             "t": self.t,

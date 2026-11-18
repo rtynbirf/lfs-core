@@ -231,3 +231,37 @@ class SelfGoalReviseAgent(BaseAgent):
         self.last_action = action
         self.t = t
         return action, goal_event
+
+
+class StickyHeuristic(BaseAgent):
+    """v0.6.1: КОНТРОЛЬ «обязательство без целей». Те же наблюдения, что у D (opened, progress),
+    правило «доделай начатое», но ни объекта цели, ни goal-событий."""
+    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
+        if self.last_action is not None and obs.get("last_reward") is not None:
+            self._remember(self.last_action, obs["last_reward"])
+        acts = obs.get("available") or []
+        stt = obs.get("project_status") or {}
+        pr = [k for k in acts if k.startswith("P")]
+        la = self.last_action
+        if la in pr and 0 < stt[la]["progress"] < stt[la]["needed"]:
+            a = la
+        elif pr and self.rng.random() < 0.85:
+            a = max(pr, key=lambda k: self._est(k) + 0.3 * stt[k]["progress"] / max(1, stt[k]["needed"])
+                    + self.rng.random() * 0.05)
+        else:
+            pb = [k for k in acts if k.startswith("probe")]
+            a = self.rng.choice(pb) if pb and self.rng.random() < 0.5 else self.rng.choice(acts)
+        self.last_action = a
+        self.t = obs["t"]
+        return a, None
+
+
+class OracleNoGoal(BaseAgent):
+    """v0.6.1: ПОТОЛОК. Использует привилегированный payoff/needed из obs; без целей."""
+    def step(self, obs: Dict[str, Any]) -> Tuple[Optional[str], Optional[Dict]]:
+        stt = obs.get("project_status") or {}
+        pr = [k for k in (obs.get("available") or []) if k.startswith("P")]
+        self.t = obs["t"]
+        if not pr:
+            return None, None
+        return max(pr, key=lambda k: stt[k]["payoff"] / stt[k]["needed"]), None

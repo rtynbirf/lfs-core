@@ -1,4 +1,4 @@
-# LFS CORE v0.6 — Goal Necessity & Causal Value
+# LFS CORE v0.6.1 — Goal Necessity (патч v0.6 по аудиту, см. AUDIT.md)
 
 Проверяем не наличие целей, а **нужны ли они**.
 
@@ -27,3 +27,9 @@
 python3 -m unittest discover -s tests -v
 python3 run_demo.py
 ```
+
+## v0.6.1
+- Контроли: `StickyHeuristic` (обязательство без целей, те же наблюдения), `OracleNoGoal` (потолок). `goal_increment()` проверяет, даёт ли механизм целей пользу сверх обязательства.
+- Опции мира: `decay=True` (цена переключения), `harsh=True` (смена законов убивает проекты); смена ровно на `change_at`.
+- Происхождение цели проверяет harness (`PROJECT_OPENED` как причина), иначе `GOAL_UNVERIFIED`.
+- Метрики: `share_of_oracle`, `post_change_quality`.
