@@ -10,7 +10,7 @@
 import hashlib, json, os, re, subprocess
 
 try:
-    CFG = json.loads(r'''{"name": "lfs-core", "num": 133, "school": "МИФО-РЕАЛИЗМ", "desc": "Испытательный стенд автономного агента: цель/обязательство/пересмотр измеряются, а не декларируются. Канон v0.7 (main) + летопись v0.3→v0.7 (теги).", "topics": [], "releases": 0, "palette": {"bg": "#38100A", "bg2": "#4E1A10", "ink": "#F4E9D6", "gold": "#D4AF37", "gold2": "#E8C868", "dim": "#C39272", "accent": "#2C5F9E"}}''')
+    CFG = json.loads(r'''{"name": "lfs-core", "num": 36, "school": "НОВОСТРОЙ РОЯ", "desc": "Испытательный стенд автономного агента: цель/обязательство/пересмотр измеряются, а не декларируются. Канон v0.7 (main) + летопись v0.3→v0.7 (теги).", "topics": ["agent-infrastructure", "audit", "pid1", "python"], "releases": 0, "palette": {"bg": "#10243E", "bg2": "#1B3B5F", "ink": "#F3ECD9", "gold": "#D4AF37", "gold2": "#E8C868", "dim": "#8FA3BF", "accent": "#D5281B"}}''')
 except Exception:
     CFG = {"name": "REVO", "num": 0, "school": "", "desc": "", "topics": [], "releases": 0,
            "palette": dict(bg="#EFE6CF", bg2="#F6EFDC", ink="#241C10", gold="#9A7B23",
