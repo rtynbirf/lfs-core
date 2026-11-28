@@ -4,6 +4,14 @@
 
 </div>
 
+<!--ФОРЖ:МУЗА:НАЧАЛО-->
+<div align="center">
+  <img src="https://cdn.jsdelivr.net/gh/rtynbirf/lfs-core@main/repo-muse.svg" width="100%" alt="Муза lfs-core: мастерская КУЗНЯ ПОЛИМАТ, кузня ПОЛИМАТ, раунд 12 · REVE=РЕВО" />
+  <br/>
+  <img src="https://cdn.jsdelivr.net/gh/rtynbirf/lfs-core@main/forge-divider.svg" width="62%" alt="делитель мастерской КУЗНЯ ПОЛИМАТ" />
+</div>
+<!--ФОРЖ:МУЗА:КОНЕЦ-->
+
 <!--ФОРЖ:ПАСПОРТ:НАЧАЛО-->
 <div align="center">
   <img src="revo-page.svg" width="100%" alt="РЕВО-паспорт страницы lfs-core в каноне ORNAMENTAL MYTHO-REALISM: орнаментальная решётка, медальон-миф, строение файлов, лексикон — по фактическому контенту" />
@@ -11,8 +19,20 @@
 
 | ФАЙЛОВ | ПАПОК | КОММИТОВ | ОБНОВЛЕНО | РЕЛИЗОВ |
 |---:|---:|---:|---|---:|
-| 40 | 6 | 89 | 2026-11-28 | 0 |
+| 40 | 6 | 1 | 2026-11-28 | 1 |
 <!--ФОРЖ:ПАСПОРТ:КОНЕЦ-->
+
+# lfs-core
+
+<p align="center"><img src="https://cdn.jsdelivr.net/gh/rtynbirf/lfs-core@main/.github/social-preview.png" alt="lfs-core" width="100%"></p>
+
+<div align="center">
+
+<a href="https://github.com/rtynbirf/lfs-core"><img src="banner.png" width="100%" alt="lfs-core — штандарт мастерской в каноне ORNAMENTAL MYTHO-REALISM"></a>
+
+</div>
+
+
 
 # LFS CORE
 
@@ -49,3 +69,5 @@ python3 run_demo.py
 
 NOT_REFUTED ≠ доказано. Аудит v0.6.1: основной эффект даёт упорство; «цели ценны»
 на стенде не подтверждено — открытая задача. Аудиты: AUDIT.md в v0.4.1 / v0.5.1 / v0.6.1.
+
+<!--ФОРЖ:ПОДВАЛ-->
