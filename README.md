@@ -19,8 +19,20 @@
 
 | ФАЙЛОВ | ПАПОК | КОММИТОВ | ОБНОВЛЕНО | РЕЛИЗОВ |
 |---:|---:|---:|---|---:|
-| 41 | 6 | 91 | 2026-11-28 | 0 |
+| 41 | 6 | 1 | 2026-11-28 | 1 |
 <!--ФОРЖ:ПАСПОРТ:КОНЕЦ-->
+
+# lfs-core
+
+<div align="center">
+
+<a href="https://github.com/rtynbirf/lfs-core"><img src="banner.png" width="100%" alt="lfs-core — штандарт мастерской в каноне ORNAMENTAL MYTHO-REALISM"></a>
+
+</div>
+
+
+
+
 
 # lfs-core
 
